@@ -18,10 +18,21 @@ import joblib
 import shap
 
 from rdkit import Chem, DataStructs, RDLogger
-from rdkit.Chem import AllChem, Descriptors, rdMolDescriptors, Draw
+from rdkit.Chem import AllChem, Descriptors, rdMolDescriptors
 from rdkit.Chem.MolStandardize import rdMolStandardize
 
 RDLogger.DisableLog("rdApp.*")
+
+# The 2D structure-drawing part of RDKit depends on system graphics
+# libraries (libXrender, etc.) that aren't always available on every
+# hosting platform. Rather than let a missing system library crash the
+# entire app, we make the drawing feature optional: if it's available, we
+# use it; if not, the app still works fully, just without the picture.
+try:
+    from rdkit.Chem import Draw
+    DRAWING_AVAILABLE = True
+except ImportError:
+    DRAWING_AVAILABLE = False
 
 # ---------------------------------------------------------------------------
 # Config — paths are relative to wherever you run `streamlit run` from.
@@ -34,7 +45,7 @@ DESCRIPTOR_NAMES = ["MolWt", "LogP", "TPSA", "HBD", "HBA", "RotatableBonds", "Ri
 MODEL_PATH = Path("models/final_model.joblib")
 PROCESSED_PATH = Path("data/processed/dilirank_processed.csv")
 
-st.set_page_config(page_title="HepatoRisk", page_icon="🧪", layout="centered")
+st.set_page_config(page_title="DrugSafe", page_icon="🧪", layout="centered")
 
 _largest_fragment = rdMolStandardize.LargestFragmentChooser()
 _uncharger = rdMolStandardize.Uncharger()
@@ -83,61 +94,37 @@ PUBCHEM_URL = (
     "CanonicalSMILES/JSON"
 )
 
-@st.cache_resource
-def load_builtin_library(n_samples: int = 20) -> dict[str, str]:
-    """
-    Library for the 'Choose from library' option. Preferentially built from
-    YOUR OWN processed dataset (dilirank_processed.csv) — every smiles_std
-    value there already passed through RDKit standardization in
-    data_prep.py, so it's guaranteed to parse and reflects real compounds
-    from your actual pipeline, not a hardcoded external guess.
-
-    Falls back to a small set of well-known, RDKit-verified drugs only if
-    that file isn't available yet, so this option still always works.
-    """
-    if PROCESSED_PATH.exists():
-        df = pd.read_csv(PROCESSED_PATH)
-        if {"CompoundName", "smiles_std"}.issubset(df.columns) and len(df) > 0:
-            df = df.dropna(subset=["CompoundName", "smiles_std"]).drop_duplicates(subset="CompoundName")
-            sample = df.sample(n=min(n_samples, len(df)), random_state=42).sort_values("CompoundName")
-            return dict(zip(sample["CompoundName"], sample["smiles_std"]))
-
-    return dict(_FALLBACK_LIBRARY)
-
-
-# Fallback only — used if dilirank_processed.csv isn't found. Every entry
-# below was verified to parse correctly with RDKit before being included.
-_FALLBACK_LIBRARY = {
-    "Aspirin": "CC(=O)OC1=CC=CC=C1C(=O)O",
-    "Ibuprofen": "CC(C)Cc1ccc(cc1)C(C)C(=O)O",
-    "Acetaminophen (Paracetamol)": "CC(=O)Nc1ccc(O)cc1",
-    "Caffeine": "Cn1cnc2c1c(=O)n(C)c(=O)n2C",
-    "Metformin": "CN(C)C(=N)NC(=N)N",
-    "Warfarin": "CC(=O)CC(c1ccccc1)c1c(O)c2ccccc2oc1=O",
-    "Diazepam": "CN1c2ccc(Cl)cc2C(=NCC1=O)c1ccccc1",
-    "Omeprazole": "CC1=CN=C(C(=C1OC)C)CS(=O)C1=NC2=C(N1)C=C(C=C2)OC",
-    "Penicillin G": "CC1(C)S[C@@H]2[C@H](NC(=O)Cc3ccccc3)C(=O)N2[C@H]1C(=O)O",
-    "Amoxicillin": "CC1(C)S[C@@H]2[C@H](NC(=O)[C@H](N)c3ccc(O)cc3)C(=O)N2[C@H]1C(=O)O",
-    "Codeine": "CN1CC[C@]23c4c5ccc(O)c4O[C@H]2[C@@H](OC)C=C[C@H]3[C@H]1C5",
-    "Nicotine": "CN1CCC[C@H]1c1cccnc1",
-    "Atorvastatin": "CC(C)c1c(C(=O)Nc2ccccc2)c(-c2ccccc2)c(-c2ccc(F)cc2)n1CC[C@@H](O)C[C@@H](O)CC(=O)O",
-    "Simvastatin": "CCC(C)(C)C(=O)O[C@H]1C[C@@H](C)C=C2C=C[C@H](C)[C@H](CC[C@@H]3C[C@@H](O)CC(=O)O3)[C@@H]12",
-    "Diclofenac": "OC(=O)Cc1ccccc1Nc1c(Cl)cccc1Cl",
-    "Metronidazole": "Cc1ncc([N+](=O)[O-])n1CCO",
-    "Ciprofloxacin": "OC(=O)c1cn(C2CC2)c2cc(N3CCNCC3)c(F)cc2c1=O",
-    "Fluoxetine": "CNCCC(Oc1ccc(cc1)C(F)(F)F)c1ccccc1",
-    "Losartan": "CCCCc1nc(Cl)c(CO)n1Cc1ccc(cc1)-c1ccccc1-c1nnn[nH]1",
-    "Amlodipine": "CCOC(=O)C1=C(COCCN)NC(C)=C(C(=O)OC)C1c1ccccc1Cl",
+# A small built-in fallback for common drugs, checked BEFORE hitting
+# PubChem. These always work instantly, even if PubChem is down, rate-
+# limiting you, or changes its response format again — useful for demos
+# and for the sanity-check tests you'll run most often.
+KNOWN_DRUG_SMILES = {
+    "aspirin": "CC(=O)OC1=CC=CC=C1C(=O)O",
+    "ibuprofen": "CC(C)Cc1ccc(cc1)C(C)C(=O)O",
+    "paracetamol": "CC(=O)Nc1ccc(O)cc1",
+    "acetaminophen": "CC(=O)Nc1ccc(O)cc1",
+    "metformin": "CN(C)C(=N)NC(=N)N",
+    "isoniazid": "NNC(=O)c1ccncc1",
+    "atorvastatin": "CC(C)c1c(C(=O)Nc2ccccc2)c(-c2ccccc2)c(-c2ccc(F)cc2)n1CCC(O)CC(O)CC(=O)O",
+    "amoxicillin": "CC1(C)S[C@@H]2[C@H](NC(=O)[C@H](N)c3ccc(O)cc3)C(=O)N2[C@H]1C(=O)O",
+    "diclofenac": "OC(=O)Cc1ccccc1Nc1c(Cl)cccc1Cl",
+    "warfarin": "CC(=O)CC(c1ccccc1)c1c(O)c2ccccc2oc1=O",
+    "diazepam": "CN1c2ccc(Cl)cc2C(=NCC1=O)c1ccccc1",
+    "omeprazole": "COc1ccc2[nH]c(nc2c1)S(=O)Cc1ncc(C)c(OC)c1C",
 }
 
 
 @st.cache_data(show_spinner=False)
 def lookup_smiles_by_name(drug_name: str) -> str | None:
     """
-    Look up a drug name on PubChem and return its SMILES, or None if not
-    found. Cached so re-searching the same name during your session is
-    instant and doesn't hit PubChem again.
+    Look up a drug name and return its SMILES, or None if not found.
+    Checks the built-in fallback list first (instant, no internet needed),
+    then falls back to a live PubChem lookup for anything not in that list.
     """
+    normalized = drug_name.strip().lower()
+    if normalized in KNOWN_DRUG_SMILES:
+        return KNOWN_DRUG_SMILES[normalized]
+
     encoded_name = quote(drug_name.strip(), safe="")
     url = PUBCHEM_URL.format(name=encoded_name)
     try:
@@ -188,7 +175,7 @@ def similarity_tier(query_fp, reference_fps, k=5):
 # ---------------------------------------------------------------------------
 # App layout
 # ---------------------------------------------------------------------------
-st.title("🧪 HepatoRisk")
+st.title("🧪 DrugSafe")
 st.caption("An explainable in-silico DILI-concern classifier")
 
 st.warning(
@@ -200,14 +187,14 @@ st.warning(
     "or 'unsafe.'"
 )
 
-input_mode = st.radio("Search by", ["SMILES", "Drug name", "Choose from library"], horizontal=True)
+input_mode = st.radio("Search by", ["SMILES", "Drug name"], horizontal=True)
 
 if input_mode == "SMILES":
     smiles_input = st.text_input(
         "Enter a SMILES string",
         placeholder="e.g. CC(=O)OC1=CC=CC=C1C(=O)O  (this example is aspirin)",
     )
-elif input_mode == "Drug name":
+else:
     drug_name_input = st.text_input(
         "Enter a drug name",
         placeholder="e.g. Aspirin",
@@ -220,24 +207,12 @@ elif input_mode == "Drug name":
             st.error(
                 f"Couldn't find '{drug_name_input}' on PubChem. This can happen for "
                 "biologics (antibodies, insulins, etc. — these don't have a SMILES code), "
-                "combination products, unusual name spellings, or no internet connection. "
-                "Try the 'Choose from library' option for a guaranteed-working example, or "
-                "the SMILES option if you have the structure."
+                "combination products, or unusual name spellings. Try the SMILES option "
+                "instead if you have the structure, or double-check the spelling."
             )
         else:
             st.caption(f"Found on PubChem: `{looked_up_smiles}`")
             smiles_input = looked_up_smiles
-else:  # "Choose from library"
-    st.caption(
-        "A small built-in set of well-known drugs — no internet or PubChem lookup needed, "
-        "so this option always works."
-    )
-    library_choice = st.selectbox(
-        "Pick a drug",
-        options=list(load_builtin_library().keys()),
-    )
-    smiles_input = load_builtin_library()[library_choice]
-    st.caption(f"SMILES: `{smiles_input}`")
 
 if smiles_input:
     mol, std_smiles = standardize_smiles(smiles_input)
@@ -255,7 +230,10 @@ if smiles_input:
             st.table(pd.DataFrame(descriptors.items(), columns=["Property", "Value"]))
         with col2:
             st.subheader("Structure")
-            st.image(Draw.MolToImage(mol, size=(280, 280)))
+            if DRAWING_AVAILABLE:
+                st.image(Draw.MolToImage(mol, size=(280, 280)))
+            else:
+                st.info("2D structure image isn't available on this deployment, but the prediction below is unaffected.")
 
         # --- Prediction ---
         model = load_model()
@@ -314,7 +292,7 @@ if smiles_input:
 
 st.divider()
 st.caption(
-    "HepatoRisk is a portfolio/research project built on the FDA DILIrank 2.0 dataset. "
+    "DrugSafe is a portfolio/research project built on the FDA DILIrank 2.0 dataset. "
     "It is not a certified diagnostic or regulatory tool, has not been clinically validated, "
     "and should never be used to make decisions about any individual's treatment."
 )
