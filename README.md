@@ -11,7 +11,7 @@ The project uses the FDA **DILIrank 2.0** dataset. Along with prediction, it als
 ---
 
 ## ⚠️ Important Note
-   🔗 **[Try the live app](https://hepatorisk.streamlit.app)**
+   🔗 **[Try the live app](https://hepatorisk-sigf3grr9l2eiycorwzjad.streamlit.app/)**
 This is a **learning and research project**, not a medical or clinical tool.
 
 It cannot tell whether a drug is safe to take and should not be used for making medication-related decisions. The results are based on an existing dataset and the approach has several limitations.
