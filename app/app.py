@@ -19,10 +19,20 @@ import shap
 
 from rdkit import Chem, DataStructs, RDLogger
 from rdkit.Chem import AllChem, Descriptors, rdMolDescriptors
-from rdkit.Chem.Draw import rdMolDraw2D
 from rdkit.Chem.MolStandardize import rdMolStandardize
 
 RDLogger.DisableLog("rdApp.*")
+
+# Importing rdkit.Chem.Draw (in any form, including rdMolDraw2D) fails on
+# this deployment because the subpackage's own setup code depends on a
+# system graphics library (libXrender) that isn't available here. Wrapping
+# the import means the app runs fully — prediction, explanation, similarity
+# check — just without the 2D structure picture, instead of crashing.
+try:
+    from rdkit.Chem.Draw import rdMolDraw2D
+    DRAWING_AVAILABLE = True
+except ImportError:
+    DRAWING_AVAILABLE = False
 
 # ---------------------------------------------------------------------------
 # Config
@@ -152,14 +162,13 @@ def compute_features(mol):
     return X, fp, descriptors
 
 
-def mol_to_svg(mol, size=(320, 320)) -> str:
+def mol_to_svg(mol, size=(320, 320)) -> str | None:
     """
-    Draws the molecule as an SVG (vector image made of text/XML, not pixels).
-    This uses RDKit's own drawing engine directly, which does NOT depend on
-    system graphics libraries like libXrender — unlike the PNG-based
-    Draw.MolToImage(), which does. This is what lets the structure picture
-    work reliably on minimal cloud servers.
+    Draws the molecule as an SVG. Returns None if RDKit's drawing module
+    isn't available on this deployment (see the import guard above).
     """
+    if not DRAWING_AVAILABLE:
+        return None
     drawer = rdMolDraw2D.MolDraw2DSVG(*size)
     drawer.DrawMolecule(mol)
     drawer.FinishDrawing()
@@ -241,11 +250,11 @@ if smiles_input:
             st.table(pd.DataFrame(descriptors.items(), columns=["Property", "Value"]))
         with col2:
             st.subheader("Structure")
-            try:
-                svg = mol_to_svg(mol)
+            svg = mol_to_svg(mol)
+            if svg is not None:
                 st.image(svg, use_container_width=True)
-            except Exception:
-                st.info("2D structure image could not be rendered, but the prediction below is unaffected.")
+            else:
+                st.info("2D structure image isn't available on this deployment, but the prediction below is unaffected.")
 
         # --- Prediction ---
         model = load_model()
