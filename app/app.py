@@ -23,17 +23,6 @@ from rdkit.Chem.MolStandardize import rdMolStandardize
 
 RDLogger.DisableLog("rdApp.*")
 
-# Importing rdkit.Chem.Draw (in any form, including rdMolDraw2D) fails on
-# this deployment because the subpackage's own setup code depends on a
-# system graphics library (libXrender) that isn't available here. Wrapping
-# the import means the app runs fully — prediction, explanation, similarity
-# check — just without the 2D structure picture, instead of crashing.
-try:
-    from rdkit.Chem.Draw import rdMolDraw2D
-    DRAWING_AVAILABLE = True
-except ImportError:
-    DRAWING_AVAILABLE = False
-
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
@@ -163,16 +152,35 @@ def compute_features(mol):
 
 
 def mol_to_svg(mol, size=(320, 320)) -> str | None:
-    """
-    Draws the molecule as an SVG. Returns None if RDKit's drawing module
-    isn't available on this deployment (see the import guard above).
-    """
-    if not DRAWING_AVAILABLE:
+    """Kept for local/desktop use where RDKit's Draw module works fine."""
+    try:
+        from rdkit.Chem.Draw import rdMolDraw2D
+        drawer = rdMolDraw2D.MolDraw2DSVG(*size)
+        drawer.DrawMolecule(mol)
+        drawer.FinishDrawing()
+        return drawer.GetDrawingText()
+    except Exception:
         return None
-    drawer = rdMolDraw2D.MolDraw2DSVG(*size)
-    drawer.DrawMolecule(mol)
-    drawer.FinishDrawing()
-    return drawer.GetDrawingText()
+
+
+@st.cache_data(show_spinner=False)
+def fetch_structure_image_from_pubchem(smiles: str) -> bytes | None:
+    """
+    Asks PubChem to render the 2D structure image server-side and hands
+    back the finished picture. This avoids depending on RDKit's local
+    drawing tools entirely, which sidesteps the system-library issue that
+    breaks rdkit.Chem.Draw on this deployment. Works for any valid
+    structure, not just named/known compounds.
+    """
+    encoded_smiles = quote(smiles, safe="")
+    url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/smiles/{encoded_smiles}/PNG"
+    try:
+        resp = requests.get(url, timeout=15)
+        if resp.status_code == 200 and resp.headers.get("Content-Type", "").startswith("image"):
+            return resp.content
+        return None
+    except Exception:
+        return None
 
 
 def similarity_tier(query_fp, reference_fps, k=5):
@@ -250,11 +258,12 @@ if smiles_input:
             st.table(pd.DataFrame(descriptors.items(), columns=["Property", "Value"]))
         with col2:
             st.subheader("Structure")
-            svg = mol_to_svg(mol)
-            if svg is not None:
-                st.image(svg, use_container_width=True)
+            with st.spinner("Rendering structure..."):
+                img_bytes = fetch_structure_image_from_pubchem(std_smiles)
+            if img_bytes is not None:
+                st.image(img_bytes, use_container_width=True)
             else:
-                st.info("2D structure image isn't available on this deployment, but the prediction below is unaffected.")
+                st.info("Structure image unavailable right now (this uses an external service) — the prediction below is unaffected.")
 
         # --- Prediction ---
         model = load_model()
