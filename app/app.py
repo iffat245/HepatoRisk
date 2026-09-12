@@ -1,5 +1,5 @@
 """
-DrugSafe — Day 5: Streamlit Application
+HepatoRisk — Day 5: Streamlit Application
 ==========================================
 Run:    streamlit run app/app.py
 
@@ -36,7 +36,7 @@ except ImportError:
 
 # ---------------------------------------------------------------------------
 # Config — paths are relative to wherever you run `streamlit run` from.
-# Run this from the project root (drugsafe\), not from inside app\.
+# Run this from the project root (HepatoRisk\), not from inside app\.
 # ---------------------------------------------------------------------------
 FP_RADIUS = 2
 FP_NBITS = 2048
@@ -45,7 +45,7 @@ DESCRIPTOR_NAMES = ["MolWt", "LogP", "TPSA", "HBD", "HBA", "RotatableBonds", "Ri
 MODEL_PATH = Path("models/final_model.joblib")
 PROCESSED_PATH = Path("data/processed/dilirank_processed.csv")
 
-st.set_page_config(page_title="DrugSafe", page_icon="🧪", layout="centered")
+st.set_page_config(page_title="HepatoRisk", page_icon="🧪", layout="centered")
 
 _largest_fragment = rdMolStandardize.LargestFragmentChooser()
 _uncharger = rdMolStandardize.Uncharger()
@@ -175,7 +175,7 @@ def similarity_tier(query_fp, reference_fps, k=5):
 # ---------------------------------------------------------------------------
 # App layout
 # ---------------------------------------------------------------------------
-st.title("🧪 DrugSafe")
+st.title("🧪 HepatoRisk")
 st.caption("An explainable in-silico DILI-concern classifier")
 
 st.warning(
@@ -292,7 +292,7 @@ if smiles_input:
 
 st.divider()
 st.caption(
-    "DrugSafe is a portfolio/research project built on the FDA DILIrank 2.0 dataset. "
+    "HepatoRisk is a portfolio/research project built on the FDA DILIrank 2.0 dataset. "
     "It is not a certified diagnostic or regulatory tool, has not been clinically validated, "
     "and should never be used to make decisions about any individual's treatment."
 )
